@@ -1,0 +1,8 @@
+#For uncovering good
+.vscode
+bin
+etc
+include
+lib
+share
+lib64
