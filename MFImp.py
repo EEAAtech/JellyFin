@@ -8,6 +8,8 @@ with st.spinner("Processing data..."):
     import pandas as pd
     import plotly.graph_objects as go
     import re
+    import sqlite3
+    from datetime import datetime
     
 
 
@@ -24,8 +26,13 @@ raw_text = st.text_area(
 
 process_button = st.button("Process Data")
 
-if not process_button:
+#Save the fact that it was clicked in session state, so that we can use it to control flow. This is needed because when we click the button, the whole script runs again and we need to know that it was clicked at least once.
+if process_button:
+    st.session_state["process_clicked"] = True
+
+if "process_clicked" not in st.session_state:
     st.stop()
+
 
 if not raw_text.strip():
     st.info("Please paste your portfolio data to begin.")
@@ -141,31 +148,186 @@ with st.spinner("Processing portfolio data..."):
 
     st.subheader("TotCost vs Value (Sorted by Cost)")
 
-    chart_df = df[["Name", "TotCost", "Value"]].dropna()
-    chart_df = df.sort_values("TotCost", ascending=False)
+    # chart_df = df[["Name", "TotCost", "Value"]].dropna()
+    # chart_df = df.sort_values("TotCost", ascending=False)
 
         
-    fig = go.Figure()
+    # fig = go.Figure()
 
-    fig.add_trace(go.Bar(
-        y=chart_df["Name"],
-        x=chart_df["TotCost"],
-        name="TotCost",
-        orientation='h'
-    ))
+    # fig.add_trace(go.Bar(
+    #     y=chart_df["Name"],
+    #     x=chart_df["TotCost"],
+    #     name="TotCost",
+    #     orientation='h'
+    # ))
 
-    fig.add_trace(go.Bar(
-        y=chart_df["Name"],
-        x=chart_df["Value"],
-        name="Value",
-        orientation='h'
-    ))
+    # fig.add_trace(go.Bar(
+    #     y=chart_df["Name"],
+    #     x=chart_df["Value"],
+    #     name="Value",
+    #     orientation='h'
+    # ))
 
-    fig.update_layout(
-        barmode='group',
-        height=500 + len(chart_df) * 20,
-        yaxis=dict(autorange="reversed"),
-        margin=dict(l=200)
+    # fig.update_layout(
+    #     barmode='group',
+    #     height=500 + len(chart_df) * 20,
+    #     yaxis=dict(autorange="reversed"),
+    #     margin=dict(l=200)
+    # )
+
+    # st.plotly_chart(fig, use_container_width=True)
+
+
+# --------------------------------------------------
+# SQLITE SECTION
+# --------------------------------------------------
+
+st.divider()
+st.subheader("Quarterly Selection & Import")
+
+DB_PATH = "JellyFin.db"
+
+
+conn = sqlite3.connect(DB_PATH)
+conn.row_factory = sqlite3.Row
+cursor = conn.cursor()
+
+# --------------------------------------------------
+# A. TOP 3 MONTH/YEAR FROM MFQuarterly
+# --------------------------------------------------
+
+top_query = """
+SELECT TMonth, TYear
+FROM MFQuarterly
+GROUP BY TMonth, TYear
+ORDER BY TYear DESC, TMonth DESC
+LIMIT 3
+"""
+
+top_df = pd.read_sql_query(top_query, conn)
+
+st.markdown("### Latest 3 Imported Periods")
+st.dataframe(top_df, use_container_width=True)
+
+
+# --------------------------------------------------
+# B & C DROPDOWNS
+# --------------------------------------------------
+
+current_month = datetime.now().month
+current_year = datetime.now().year
+
+col1, col2, col3 = st.columns([1, 1, 1])
+with col1:
+    month = st.selectbox(
+        "Select Month",
+        list(range(1, 13)),
+        index=current_month - 1
+)
+
+with col2:
+    year = st.selectbox(
+        "Select Year",
+        [current_year, current_year - 1],
+        index=0
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+
+with col3:
+    st.write("Ready to go!")
+    import_clicked = st.button("Import to MFQuarterly")
+# --------------------------------------------------
+# D. IMPORT BUTTON
+# --------------------------------------------------
+with col3:
+    if import_clicked:
+
+        # --------------------------------------------------
+        # Get Active MFTrans records (ClosedDate IS NULL)
+        # --------------------------------------------------
+
+        mftrans_query = """
+        SELECT MFTransId, ISIN, Folio
+        FROM MFTrans
+        WHERE ClosedDate IS NULL
+        """
+
+        mftrans_df = pd.read_sql_query(mftrans_query, conn)
+
+        # --------------------------------------------------
+        # Merge Raw Data (df) with MFTrans
+        # --------------------------------------------------
+
+        merged = df.merge(
+            mftrans_df,
+            on=["ISIN", "Folio"],
+            how="left",
+            indicator=True
+        )
+
+        # Records that matched
+        matched = merged[merged["_merge"] == "both"].copy()
+
+        # Records in Raw but NOT in MFTrans
+        raw_unmapped = merged[merged["_merge"] == "left_only"].copy()
+
+        # --------------------------------------------------
+        # Prepare Insert Data
+        # --------------------------------------------------
+
+        insert_df = matched.copy()
+
+        insert_df["TMonth"] = month
+        insert_df["TYear"] = year
+
+        insert_cols = [
+            "MFTransId",
+            "TMonth",
+            "TYear",
+            "Units",
+            "TotCost",
+            "Nav",
+            "Value",
+            "XIRR"
+        ]
+
+        records_to_insert = insert_df[insert_cols].values.tolist()
+
+        insert_sql = """
+        INSERT INTO MFQuarterly
+        (MFTransId, TMonth, TYear, Units, TotCost, Nav, Value, XIRR)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """
+
+        # cursor.executemany(insert_sql, records_to_insert)
+        # conn.commit()
+
+        st.success(f"{len(records_to_insert)} records imported successfully.")
+
+        # --------------------------------------------------
+        # E. UNMAPPED TABLES
+        # --------------------------------------------------
+
+        st.divider()
+        st.subheader("Unmapped Records")
+
+        # Raw → MFTrans unmapped
+        st.markdown("### Raw Data NOT Found in MFTrans (ClosedDate IS NULL)")
+        st.dataframe(raw_unmapped[["ISIN", "Folio", "Name"]], use_container_width=True)
+
+        # MFTrans → Raw unmapped
+        raw_keys = df[["ISIN", "Folio"]].drop_duplicates()
+
+        mf_unmapped = mftrans_df.merge(
+            raw_keys,
+            on=["ISIN", "Folio"],
+            how="left",
+            indicator=True
+        )
+
+        mf_unmapped = mf_unmapped[mf_unmapped["_merge"] == "left_only"]
+
+        st.markdown("### MFTrans Records (ClosedDate IS NULL) NOT Found in Raw Data")
+        st.dataframe(mf_unmapped[["ISIN", "Folio", "MFTransId"]], use_container_width=True)
+
+conn.close()
