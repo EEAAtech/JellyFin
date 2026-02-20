@@ -234,11 +234,33 @@ with col2:
 
 
 with col3:
-    owner = st.selectbox(
+    # Populate owner selectbox from Owner table and map to OwnerId; fall back to hard-coded list
+    try:
+        owner_query = "SELECT OwnerId, OwnerName FROM Owner ORDER BY OwnerId"
+        owners_df = pd.read_sql_query(owner_query, conn)
+        if not owners_df.empty:
+            owner_names = owners_df["OwnerName"].tolist()
+        else:
+            st.error("No owners found in the database.")
+            st.stop()
+    except Exception:
+            st.error("No owners found in the database.")
+            st.stop()
+
+
+    selected_owner_name = st.selectbox(
         "Select Owner",
-        ["Mum", "MumEry", "MumRy"],
+        owner_names,
         index=0
     )
+
+    # Resolve selected OwnerId (None if fallback/static used)
+    sel_row = owners_df[owners_df["OwnerName"] == selected_owner_name]
+    if not sel_row.empty and pd.notna(sel_row.iloc[0]["OwnerId"]):
+        selected_owner_id = int(sel_row.iloc[0]["OwnerId"])
+    else:
+        st.info("Owners found but OwnerId is missing.")
+        st.stop()
 
 with col4:
     st.write("Ready to go!")
@@ -253,14 +275,19 @@ if import_clicked:
     # Get Active MFTrans records (ClosedDate IS NULL)
     # --------------------------------------------------
 
-    mftrans_query = """
-    SELECT MFTransId, ISIN, Folio
-    FROM MFTrans
-    WHERE ClosedDate IS NULL
-    AND Owner = ?
-    """
+    # Use OwnerId if available, otherwise fall back to Owner name column
+    if selected_owner_id is not None:
+        mftrans_query = """
+        SELECT MFTransId, ISIN, Folio
+        FROM MFTrans
+        WHERE ClosedDate IS NULL
+        AND OwnerId = ?
+        """
+        mftrans_df = pd.read_sql_query(mftrans_query, conn, params=(selected_owner_id,))
+    else:
+        st.info("Owners found but OwnerId is missing.")
+        st.stop()
 
-    mftrans_df = pd.read_sql_query(mftrans_query, conn, params=(owner,))
 
     # --------------------------------------------------
     # Merge Raw Data (df) with MFTrans
