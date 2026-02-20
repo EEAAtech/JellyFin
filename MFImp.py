@@ -185,7 +185,7 @@ with st.spinner("Processing portfolio data..."):
 st.divider()
 st.subheader("Quarterly Selection & Import")
 
-DB_PATH = "JellyFin.db"
+DB_PATH = "/home/ea/JellyFin.db"
 
 
 conn = sqlite3.connect(DB_PATH)
@@ -217,7 +217,7 @@ st.dataframe(top_df, use_container_width=True)
 current_month = datetime.now().month
 current_year = datetime.now().year
 
-col1, col2, col3 = st.columns([1, 1, 1])
+col1, col2, col3, col4 = st.columns([1, 1, 1, 1])
 with col1:
     month = st.selectbox(
         "Select Month",
@@ -234,100 +234,108 @@ with col2:
 
 
 with col3:
+    owner = st.selectbox(
+        "Select Owner",
+        ["Mum", "MumEry", "MumRy"],
+        index=0
+    )
+
+with col4:
     st.write("Ready to go!")
     import_clicked = st.button("Import to MFQuarterly")
 # --------------------------------------------------
 # D. IMPORT BUTTON
 # --------------------------------------------------
-with col3:
-    if import_clicked:
 
-        # --------------------------------------------------
-        # Get Active MFTrans records (ClosedDate IS NULL)
-        # --------------------------------------------------
+if import_clicked:
 
-        mftrans_query = """
-        SELECT MFTransId, ISIN, Folio
-        FROM MFTrans
-        WHERE ClosedDate IS NULL
-        """
+    # --------------------------------------------------
+    # Get Active MFTrans records (ClosedDate IS NULL)
+    # --------------------------------------------------
 
-        mftrans_df = pd.read_sql_query(mftrans_query, conn)
+    mftrans_query = """
+    SELECT MFTransId, ISIN, Folio
+    FROM MFTrans
+    WHERE ClosedDate IS NULL
+    AND Owner = ?
+    """
 
-        # --------------------------------------------------
-        # Merge Raw Data (df) with MFTrans
-        # --------------------------------------------------
+    mftrans_df = pd.read_sql_query(mftrans_query, conn, params=(owner,))
 
-        merged = df.merge(
-            mftrans_df,
-            on=["ISIN", "Folio"],
-            how="left",
-            indicator=True
-        )
+    # --------------------------------------------------
+    # Merge Raw Data (df) with MFTrans
+    # --------------------------------------------------
 
-        # Records that matched
-        matched = merged[merged["_merge"] == "both"].copy()
+    merged = df.merge(
+        mftrans_df,
+        on=["ISIN", "Folio"],
+        how="left",
+        indicator=True
+    )
 
-        # Records in Raw but NOT in MFTrans
-        raw_unmapped = merged[merged["_merge"] == "left_only"].copy()
+    # Records that matched
+    matched = merged[merged["_merge"] == "both"].copy()
 
-        # --------------------------------------------------
-        # Prepare Insert Data
-        # --------------------------------------------------
+    # Records in Raw but NOT in MFTrans
+    raw_unmapped = merged[merged["_merge"] == "left_only"].copy()
 
-        insert_df = matched.copy()
+    # --------------------------------------------------
+    # Prepare Insert Data
+    # --------------------------------------------------
 
-        insert_df["TMonth"] = month
-        insert_df["TYear"] = year
+    insert_df = matched.copy()
 
-        insert_cols = [
-            "MFTransId",
-            "TMonth",
-            "TYear",
-            "Units",
-            "TotCost",
-            "Nav",
-            "Value",
-            "XIRR"
-        ]
+    insert_df["TMonth"] = month
+    insert_df["TYear"] = year
 
-        records_to_insert = insert_df[insert_cols].values.tolist()
+    insert_cols = [
+        "MFTransId",
+        "TMonth",
+        "TYear",
+        "Units",
+        "TotCost",
+        "Nav",
+        "Value",
+        "XIRR"
+    ]
 
-        insert_sql = """
-        INSERT INTO MFQuarterly
-        (MFTransId, TMonth, TYear, Units, TotCost, Nav, Value, XIRR)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """
+    records_to_insert = insert_df[insert_cols].values.tolist()
 
-        # cursor.executemany(insert_sql, records_to_insert)
-        # conn.commit()
+    insert_sql = """
+    INSERT INTO MFQuarterly
+    (MFTransId, TMonth, TYear, Units, TotCost, Nav, Value, XIRR)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """
 
-        st.success(f"{len(records_to_insert)} records imported successfully.")
+    # cursor.executemany(insert_sql, records_to_insert)
+    # conn.commit()
 
-        # --------------------------------------------------
-        # E. UNMAPPED TABLES
-        # --------------------------------------------------
+    st.success(f"{len(records_to_insert)} records imported successfully.")
 
-        st.divider()
-        st.subheader("Unmapped Records")
+    # --------------------------------------------------
+    # E. UNMAPPED TABLES
+    # --------------------------------------------------
 
-        # Raw → MFTrans unmapped
-        st.markdown("### Raw Data NOT Found in MFTrans (ClosedDate IS NULL)")
-        st.dataframe(raw_unmapped[["ISIN", "Folio", "Name"]], use_container_width=True)
+    st.divider()
+    st.subheader("Unmapped Records")
 
-        # MFTrans → Raw unmapped
-        raw_keys = df[["ISIN", "Folio"]].drop_duplicates()
+    # Raw → MFTrans unmapped
+    st.markdown("### Raw Data NOT Found in MFTrans (ClosedDate IS NULL)")
+    st.dataframe(raw_unmapped[["ISIN", "Folio", "Name"]], use_container_width=True)
 
-        mf_unmapped = mftrans_df.merge(
-            raw_keys,
-            on=["ISIN", "Folio"],
-            how="left",
-            indicator=True
-        )
+    # MFTrans → Raw unmapped
+    raw_keys = df[["ISIN", "Folio"]].drop_duplicates()
 
-        mf_unmapped = mf_unmapped[mf_unmapped["_merge"] == "left_only"]
+    mf_unmapped = mftrans_df.merge(
+        raw_keys,
+        on=["ISIN", "Folio"],
+        how="left",
+        indicator=True
+    )
 
-        st.markdown("### MFTrans Records (ClosedDate IS NULL) NOT Found in Raw Data")
-        st.dataframe(mf_unmapped[["ISIN", "Folio", "MFTransId"]], use_container_width=True)
+    mf_unmapped = mf_unmapped[mf_unmapped["_merge"] == "left_only"]
+
+    st.markdown("### MFTrans Records (ClosedDate IS NULL) NOT Found in Raw Data")
+    st.dataframe(mf_unmapped[["ISIN", "Folio", "MFTransId"]], use_container_width=True)
 
 conn.close()
