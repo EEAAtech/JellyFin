@@ -26,7 +26,8 @@ raw_text = st.text_area(
 
 process_button = st.button("Process Data")
 
-#Save the fact that it was clicked in session state, so that we can use it to control flow. This is needed because when we click the button, the whole script runs again and we need to know that it was clicked at least once.
+#Save the fact that it was clicked in session state, so that we can use it to control flow. 
+#This is needed because when we click the button, the whole script runs again and we need to know that it was clicked at least once.
 if process_button:
     st.session_state["process_clicked"] = True
 

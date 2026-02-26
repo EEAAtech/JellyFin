@@ -5,6 +5,17 @@ import sqlite3
 from datetime import datetime
 
 DB_PATH = "/home/ea/JellyFin.db"
+st.set_page_config(layout="wide")
+
+# Function to covert Sqlite date string from '%d/%m/%y' to '%Y-%m-%d' 
+def convert_date_format(date_str):
+    try:
+        # Try parsing as '%d/%m/%y'
+        dt = datetime.strptime(date_str, '%d/%m/%y')
+        return dt.strftime('%Y-%m-%d')
+    except ValueError:
+        # If parsing fails, return the original string
+        return date_str
 
 # Connect to SQLite database
 conn = sqlite3.connect(DB_PATH)
@@ -24,6 +35,11 @@ if uploaded_file is not None:
     # Read the xls file without assuming row 0 is the header
     xls_data = pd.read_excel(uploaded_file, header=None)
     
+    # Set a flag in session state to indicate that the file has been imported
+    # st.session_state["process_clicked"] = True
+    # if "process_clicked" not in st.session_state:
+    #     st.stop()
+
     # Step 3: Find the row with "Date" in column A (first column)
     date_row_index = None
     for i in range(len(xls_data)):
@@ -69,17 +85,14 @@ if uploaded_file is not None:
                     row_date = xls_data.iloc[i].iloc[0]  # First column is the Date column
                     if not pd.isnull(row_date):
                         # Convert row_date to date string for comparison
-                        if isinstance(row_date, pd.Timestamp):
-                            row_date_str = row_date.strftime('%Y-%m-%d')
-                        else:
-                            row_date_str = str(row_date)
+                        row_date_str = convert_date_format(row_date)
                         
                         # Only import if this date is after the last import date
                         if last_import_date is None or row_date_str > last_import_date:
                             # Get values by column position since they're accessed by name in the header row
-                            narration = xls_data.iloc[i].iloc[2] if len(xls_data.columns) > 2 else None
-                            deposit_amt = xls_data.iloc[i].iloc[3] if len(xls_data.columns) > 3 else None
+                            narration = xls_data.iloc[i].iloc[1] if len(xls_data.columns) > 2 else None
                             withdrawal_amt = xls_data.iloc[i].iloc[4] if len(xls_data.columns) > 4 else None
+                            deposit_amt = xls_data.iloc[i].iloc[5] if len(xls_data.columns) > 3 else None
                             
                             query_insert_sb = """INSERT INTO SB (BankId, DateT, SBName, AmtIn, AmtOut) 
                                                  VALUES (?, ?, ?, ?, ?)"""
@@ -96,7 +109,7 @@ if uploaded_file is not None:
                 st.success(f"Successfully imported {imported_count} records")
                 
                 # Step 8: Display a table listing the records from vwSBRunningTotal
-                query_running_total = """SELECT * FROM vwSBRunningTotal 
+                query_running_total = """SELECT SBId, DateT, SBName, AmtIn, AmtOut, BankId FROM vwSBRunningTotal 
                                          WHERE BankId = ? AND DateT > ?"""
                 running_total_data = pd.read_sql_query(query_running_total, conn, 
                                                        params=(selected_bank_id, last_import_date))
@@ -137,7 +150,7 @@ if uploaded_file is not None:
                         })
                     
                     # Save button
-                    if st.button("Save Comments"):
+                    if st.button("Save"):
                         try:
                             for item in edited_data:
                                 update_query = "UPDATE SB SET Comment = ? WHERE SBId = ?"
@@ -157,4 +170,3 @@ if uploaded_file is not None:
 
 conn.close()
 
-st.sidebar.title("Import Excel File")
