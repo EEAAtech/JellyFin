@@ -7,6 +7,16 @@ from datetime import datetime
 DB_PATH = "/home/ea/JellyFin.db"
 st.set_page_config(layout="wide")
 
+# Initialize session state variables
+if "import_completed" not in st.session_state:
+    st.session_state.import_completed = False
+if "imported_data" not in st.session_state:
+    st.session_state.imported_data = None
+if "selected_bank_id" not in st.session_state:
+    st.session_state.selected_bank_id = None
+if "last_import_date" not in st.session_state:
+    st.session_state.last_import_date = None
+
 # Function to covert Sqlite date string from '%d/%m/%y' to '%Y-%m-%d' 
 def convert_date_format(date_str):
     try:
@@ -31,7 +41,8 @@ selected_bank = st.selectbox('Select bank', list(bank_dict.keys()))
 # Allow user to upload xls file
 uploaded_file = st.file_uploader("Choose an Excel (.xls) file", type=['xls'])
 
-if uploaded_file is not None:
+# Only process file upload if import hasn't been completed yet
+if uploaded_file is not None and not st.session_state.import_completed:
     # Read the xls file without assuming row 0 is the header
     xls_data = pd.read_excel(uploaded_file, header=None)
     
@@ -108,65 +119,135 @@ if uploaded_file is not None:
                 conn.commit()
                 st.success(f"Successfully imported {imported_count} records")
                 
+                # Store in session state for display
+                st.session_state.imported_data = imported_count
+                st.session_state.selected_bank_id = selected_bank_id
+                st.session_state.last_import_date = last_import_date
+                st.session_state.import_completed = True
+                
+                # Auto-categorize newly imported records based on SBName patterns
+                if imported_count > 0:
+                    update_queries = [
+                        ("UPDATE SB SET CategoryId=1 WHERE DateT>? AND CategoryId IS NULL AND AmtIn>0 AND (SBName LIKE '%CREDIT INTEREST CAPITALISED%' OR SBName LIKE '%interest paid%' OR SBName LIKE '%Int.Pd%')", "bank interest"),
+                        ("UPDATE SB SET CategoryId=2 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND (SBName LIKE '%cc 00055%' OR SBName LIKE '%cc0xx%')", "cc"),
+                        ("UPDATE SB SET CategoryId=3 WHERE DateT>? AND CategoryId IS NULL AND AmtIn>0 AND SBName LIKE '%idcw%'", "idcw"),
+                        ("UPDATE SB SET CategoryId=5 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE '%TTM%'", "TTM"),
+                        ("UPDATE SB SET CategoryId=9 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND (SBName LIKE '%pay to ramya%' OR SBName LIKE '%lunch%' OR SBName LIKE '%dinner%' OR SBName LIKE '%swiggy%' OR SBName LIKE '%zomat%' OR SBName LIKE '%bfast%' OR SBName LIKE '%breakfasat%' OR SBName LIKE '%snacks%' OR SBName LIKE '%cred%' OR SBName LIKE '%-Tea')", "meals"),
+                        ("UPDATE SB SET CategoryId=10 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE '%Holiday%'", "Holiday"),
+                        ("UPDATE SB SET CategoryId=13 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE '%BY%_NET_RENEWAL'", "Insurance"),
+                        ("UPDATE SB SET CategoryId=15 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND (SBName LIKE '%shopping%' OR SBName LIKE '%home%' OR SBName LIKE '%electricity%' OR SBName LIKE '%locker%' OR SBName LIKE '%UPI-CCP%')", "Home/Shopping"),
+                        ("UPDATE SB SET CategoryId=17 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND (SBName LIKE '%Med%' OR SBName LIKE '%doc%')", "Medical"),
+                        ("UPDATE SB SET CategoryId=20 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE '%Family%'", "Family"),
+                        ("UPDATE SB SET CategoryId=21 WHERE DateT>? AND CategoryId IS NULL AND AmtIn>0 AND SBName LIKE '%inttrans%'", "Inttrans in"),
+                        ("UPDATE SB SET CategoryId=22 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE '%inttrans%'", "Inttrans out"),
+                        ("UPDATE SB SET CategoryId=23 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE 'ACH D-%'", "MF invest"),
+                        ("UPDATE SB SET CategoryId=24 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND (SBName LIKE '%haircut%' OR SBName LIKE '%water%' OR SBName LIKE '%amazon%')", "self"),
+                        ("UPDATE SB SET CategoryId=26 WHERE DateT>? AND CategoryId IS NULL AND AmtIn>0 AND SBName LIKE '%elait%'", "Salary"),
+                        ("UPDATE SB SET CategoryId=29 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND (SBName LIKE '%PUC%' OR SBName LIKE '%parking%' OR SBName LIKE '%carfix%' OR SBName LIKE '%tyres%' OR SBName LIKE '%MANOJSUTAR%' OR SBName LIKE '%taxi%')", "Car Maintenance"),
+                        ("UPDATE SB SET CategoryId=30 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE '%petrol%'", "petrol"),
+                        ("UPDATE SB SET CategoryId=1009 WHERE DateT>? AND CategoryId IS NULL AND AmtIn>0 AND SBName LIKE '%PRUDENTIAL MUTUAL FUND RED A/C%'", "SWP"),
+                    ]
+                    
+                    for query, category_name in update_queries:
+                        cursor.execute(query, (last_import_date,))
+                    
+                    conn.commit()
+                
                 # Step 8: Display a table listing the records from vwSBRunningTotal
-                query_running_total = """SELECT SBId, DateT, SBName, AmtIn, AmtOut, BankId FROM vwSBRunningTotal 
+                query_running_total = """SELECT SBId, DateT, SBName, AmtIn, AmtOut, BankId, RunningTotal FROM vwSBRunningTotal 
                                          WHERE BankId = ? AND DateT > ?"""
                 running_total_data = pd.read_sql_query(query_running_total, conn, 
                                                        params=(selected_bank_id, last_import_date))
                 st.dataframe(running_total_data)
-                
-                # Display editable table for newly imported records
-                st.subheader("Edit Comments for Newly Imported Records")
-                
-                # Fetch newly imported records with their SBId for updating
-                query_new_records = """SELECT SBId, DateT, SBName, AmtIn, AmtOut, Comment FROM SB 
-                                       WHERE BankId = ? AND DateT > ?
-                                       ORDER BY DateT DESC"""
-                new_records = pd.read_sql_query(query_new_records, conn, 
-                                               params=(selected_bank_id, last_import_date))
-                
-                if len(new_records) > 0:
-                    # Create editable columns
-                    edited_data = []
-                    for idx, row in new_records.iterrows():
-                        col1, col2, col3, col4, col5, col6 = st.columns([1, 3, 1, 1, 2, 1])
-                        
-                        with col1:
-                            st.write(row['DateT'])
-                        with col2:
-                            st.write(row['SBName'])
-                        with col3:
-                            st.write(f"{row['AmtIn']}" if row['AmtIn'] else "")
-                        with col4:
-                            st.write(f"{row['AmtOut']}" if row['AmtOut'] else "")
-                        with col5:
-                            comment = st.text_input(f"Comment {idx}", value=row['Comment'] if row['Comment'] else "", key=f"comment_{row['SBId']}")
-                        with col6:
-                            st.write("")
-                        
-                        edited_data.append({
-                            'SBId': row['SBId'],
-                            'Comment': comment
-                        })
-                    
-                    # Save button
-                    if st.button("Save"):
-                        try:
-                            for item in edited_data:
-                                update_query = "UPDATE SB SET Comment = ? WHERE SBId = ?"
-                                cursor.execute(update_query, (item['Comment'], item['SBId']))
-                            conn.commit()
-                            st.success("Comments saved successfully!")
-                        except Exception as e:
-                            st.error(f"Error saving comments: {str(e)}")
-                else:
-                    st.info("No newly imported records to edit.")
             else:
                 st.error("The row after 'Date' does not contain all '*' characters. Cannot find data start.")
         else:
             st.error("No row after 'Date' header found in the Excel file.")
     else:
         st.error("Could not find 'Date' header in column A of the Excel file.")
+
+# If import is already completed, display the editable section without re-running imports
+if st.session_state.import_completed:
+    st.divider()
+    st.subheader("Edit Comments and Categories for Newly Imported Records")
+    
+    # Fetch category data
+    query_categories = "SELECT CategoryId, CategoryName FROM Category ORDER BY CategoryName"
+    categories_df = pd.read_sql_query(query_categories, conn)
+    category_dict = dict(zip(categories_df['CategoryName'], categories_df['CategoryId']))
+    category_names = [''] + list(category_dict.keys())  # Add empty option at the beginning
+    
+    # Fetch newly imported records with their SBId for updating
+    query_new_records = """SELECT SBId, DateT, SBName, AmtIn, AmtOut, Comment, CategoryId FROM SB 
+                           WHERE BankId = ? AND DateT > ?
+                           ORDER BY DateT DESC"""
+    new_records = pd.read_sql_query(query_new_records, conn, 
+                                   params=(st.session_state.selected_bank_id, st.session_state.last_import_date))
+    
+    if len(new_records) > 0:
+        # Create table header
+        col1, col2, col3, col4, col5, col6, col7 = st.columns([1, 3, 1, 1, 2, 2, 1])
+        with col1:
+            st.write("**Date**")
+        with col2:
+            st.write("**Description**")
+        with col3:
+            st.write("**In**")
+        with col4:
+            st.write("**Out**")
+        with col5:
+            st.write("**Comment**")
+        with col6:
+            st.write("**Category**")
+        with col7:
+            st.write("")
+        
+        # Create editable rows
+        edited_data = []
+        for idx, row in new_records.iterrows():
+            col1, col2, col3, col4, col5, col6, col7 = st.columns([1, 3, 1, 1, 2, 2, 1])
+            
+            with col1:
+                st.write(row['DateT'])
+            with col2:
+                st.write(row['SBName'])
+            with col3:
+                st.write(f"{row['AmtIn']}" if row['AmtIn'] else "")
+            with col4:
+                st.write(f"{row['AmtOut']}" if row['AmtOut'] else "")
+            with col5:
+                comment = st.text_input(f"Comment {idx}", value=row['Comment'] if row['Comment'] else "", key=f"comment_{row['SBId']}")
+            with col6:
+                # Get current category name if available
+                current_category = ""
+                if row['CategoryId']:
+                    current_category = categories_df[categories_df['CategoryId'] == row['CategoryId']]['CategoryName'].values
+                    current_category = current_category[0] if len(current_category) > 0 else ""
+                
+                category = st.selectbox(f"Category {idx}", category_names, 
+                                       index=category_names.index(current_category) if current_category in category_names else 0,
+                                       key=f"category_{row['SBId']}")
+            with col7:
+                st.write("")
+            
+            edited_data.append({
+                'SBId': row['SBId'],
+                'Comment': comment,
+                'CategoryId': category_dict[category] if category else None
+            })
+        
+        # Save button
+        if st.button("Save"):
+            try:
+                for item in edited_data:
+                    update_query = "UPDATE SB SET Comment = ?, CategoryId = ? WHERE SBId = ?"
+                    cursor.execute(update_query, (item['Comment'], item['CategoryId'], item['SBId']))
+                conn.commit()
+                st.success("Comments and categories saved successfully!")
+            except Exception as e:
+                st.error(f"Error saving comments and categories: {str(e)}")
+    else:
+        st.info("No newly imported records to edit.")
 
 conn.close()
 
