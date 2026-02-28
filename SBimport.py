@@ -3,6 +3,7 @@ import pandas as pd
 from io import BytesIO
 import sqlite3
 from datetime import datetime
+from sb_classifier import get_proposed_category, update_sb_meta
 
 DB_PATH = "/home/ea/JellyFin.db"
 st.set_page_config(layout="wide")
@@ -125,31 +126,19 @@ if uploaded_file is not None and not st.session_state.import_completed:
                 st.session_state.last_import_date = last_import_date
                 st.session_state.import_completed = True
                 
-                # Auto-categorize newly imported records based on SBName patterns
+                # Auto-categorize newly imported records using the smart classifier
                 if imported_count > 0:
-                    update_queries = [
-                        ("UPDATE SB SET CategoryId=1 WHERE DateT>? AND CategoryId IS NULL AND AmtIn>0 AND (SBName LIKE '%CREDIT INTEREST CAPITALISED%' OR SBName LIKE '%interest paid%' OR SBName LIKE '%Int.Pd%')", "bank interest"),
-                        ("UPDATE SB SET CategoryId=2 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND (SBName LIKE '%cc 00055%' OR SBName LIKE '%cc0xx%')", "cc"),
-                        ("UPDATE SB SET CategoryId=3 WHERE DateT>? AND CategoryId IS NULL AND AmtIn>0 AND SBName LIKE '%idcw%'", "idcw"),
-                        ("UPDATE SB SET CategoryId=5 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE '%TTM%'", "TTM"),
-                        ("UPDATE SB SET CategoryId=9 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND (SBName LIKE '%pay to ramya%' OR SBName LIKE '%lunch%' OR SBName LIKE '%dinner%' OR SBName LIKE '%swiggy%' OR SBName LIKE '%zomat%' OR SBName LIKE '%bfast%' OR SBName LIKE '%breakfasat%' OR SBName LIKE '%snacks%' OR SBName LIKE '%cred%' OR SBName LIKE '%-Tea')", "meals"),
-                        ("UPDATE SB SET CategoryId=10 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE '%Holiday%'", "Holiday"),
-                        ("UPDATE SB SET CategoryId=13 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE '%BY%_NET_RENEWAL'", "Insurance"),
-                        ("UPDATE SB SET CategoryId=15 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND (SBName LIKE '%shopping%' OR SBName LIKE '%home%' OR SBName LIKE '%electricity%' OR SBName LIKE '%locker%' OR SBName LIKE '%UPI-CCP%')", "Home/Shopping"),
-                        ("UPDATE SB SET CategoryId=17 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND (SBName LIKE '%Med%' OR SBName LIKE '%doc%')", "Medical"),
-                        ("UPDATE SB SET CategoryId=20 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE '%Family%'", "Family"),
-                        ("UPDATE SB SET CategoryId=21 WHERE DateT>? AND CategoryId IS NULL AND AmtIn>0 AND SBName LIKE '%inttrans%'", "Inttrans in"),
-                        ("UPDATE SB SET CategoryId=22 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE '%inttrans%'", "Inttrans out"),
-                        ("UPDATE SB SET CategoryId=23 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE 'ACH D-%'", "MF invest"),
-                        ("UPDATE SB SET CategoryId=24 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND (SBName LIKE '%haircut%' OR SBName LIKE '%water%' OR SBName LIKE '%amazon%')", "self"),
-                        ("UPDATE SB SET CategoryId=26 WHERE DateT>? AND CategoryId IS NULL AND AmtIn>0 AND SBName LIKE '%elait%'", "Salary"),
-                        ("UPDATE SB SET CategoryId=29 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND (SBName LIKE '%PUC%' OR SBName LIKE '%parking%' OR SBName LIKE '%carfix%' OR SBName LIKE '%tyres%' OR SBName LIKE '%MANOJSUTAR%' OR SBName LIKE '%taxi%')", "Car Maintenance"),
-                        ("UPDATE SB SET CategoryId=30 WHERE DateT>? AND CategoryId IS NULL AND AmtOut>0 AND SBName LIKE '%petrol%'", "petrol"),
-                        ("UPDATE SB SET CategoryId=1009 WHERE DateT>? AND CategoryId IS NULL AND AmtIn>0 AND SBName LIKE '%PRUDENTIAL MUTUAL FUND RED A/C%'", "SWP"),
-                    ]
+                    query_uncategorized = """SELECT SBId, SBName, AmtIn, AmtOut FROM SB 
+                                             WHERE BankId = ? AND DateT > ? AND CategoryId IS NULL"""
+                    uncategorized_records = pd.read_sql_query(query_uncategorized, conn, 
+                                                              params=(selected_bank_id, last_import_date))
                     
-                    for query, category_name in update_queries:
-                        cursor.execute(query, (last_import_date,))
+                    for _, record in uncategorized_records.iterrows():
+                        proposed_category = get_proposed_category(conn, record['SBName'], 
+                                                                 record['AmtIn'], record['AmtOut'])
+                        if proposed_category:
+                            cursor.execute("UPDATE SB SET CategoryId = ? WHERE SBId = ?", 
+                                         (proposed_category, record['SBId']))
                     
                     conn.commit()
                 
@@ -220,9 +209,11 @@ if st.session_state.import_completed:
             with col6:
                 # Get current category name if available
                 current_category = ""
+                current_category_id = None
                 if row['CategoryId']:
                     current_category = categories_df[categories_df['CategoryId'] == row['CategoryId']]['CategoryName'].values
                     current_category = current_category[0] if len(current_category) > 0 else ""
+                    current_category_id = row['CategoryId']
                 
                 category = st.selectbox(f"Category {idx}", category_names, 
                                        index=category_names.index(current_category) if current_category in category_names else 0,
@@ -230,18 +221,29 @@ if st.session_state.import_completed:
             with col7:
                 st.write("")
             
+            selected_category_id = category_dict[category] if category else None
             edited_data.append({
                 'SBId': row['SBId'],
                 'Comment': comment,
-                'CategoryId': category_dict[category] if category else None
+                'CategoryId': selected_category_id,
+                'PreviousCategoryId': current_category_id,
+                'SBName': row['SBName'],
+                'AmtIn': row['AmtIn'],
+                'AmtOut': row['AmtOut']
             })
         
         # Save button
         if st.button("Save"):
             try:
                 for item in edited_data:
+                    # Update comment and category
                     update_query = "UPDATE SB SET Comment = ?, CategoryId = ? WHERE SBId = ?"
                     cursor.execute(update_query, (item['Comment'], item['CategoryId'], item['SBId']))
+                    
+                    # If category was changed, learn from the user's selection
+                    if item['CategoryId'] and item['CategoryId'] != item['PreviousCategoryId']:
+                        update_sb_meta(conn, item['SBName'], item['AmtIn'], item['AmtOut'], item['CategoryId'])
+                
                 conn.commit()
                 st.success("Comments and categories saved successfully!")
             except Exception as e:
