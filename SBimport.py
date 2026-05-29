@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime
 from sb_classifier import get_proposed_category, update_sb_meta
 
-DB_PATH = "/home/ea/JellyFin.db"
+DB_PATH = "/home/ea/TTMbak/JellyFin/JellyFin.db"
 st.set_page_config(layout="wide")
 
 # Initialize session state variables
@@ -40,7 +40,7 @@ bank_dict = dict(zip(bank_df['BankName'], bank_df['BankId']))
 selected_bank = st.selectbox('Select bank', list(bank_dict.keys()))
 
 # Allow user to upload xls file
-uploaded_file = st.file_uploader("Choose an Excel (.xls) file", type=['xls'])
+uploaded_file = st.file_uploader("Choose an Excel (.xls) file", type=['xls', 'xlsx'])
 
 # Only process file upload if import hasn't been completed yet
 if uploaded_file is not None and not st.session_state.import_completed:
