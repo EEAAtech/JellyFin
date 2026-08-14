@@ -5,6 +5,9 @@ import sqlite3
 from datetime import datetime
 from sb_classifier import get_proposed_category, update_sb_meta
 
+# TODO: make compatible with ICICI. Till then, just copy from the icici excel into an HDFC stmt and ensure the dates are in yyyy-mm-dd format 
+
+
 DB_PATH = "/home/ea/TTMbak/JellyFin/JellyFin.db"
 st.set_page_config(layout="wide")
 

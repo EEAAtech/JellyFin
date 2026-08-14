@@ -186,7 +186,7 @@ with st.spinner("Processing portfolio data..."):
 st.divider()
 st.subheader("Quarterly Selection & Import")
 
-DB_PATH = "/home/ea/JellyFin.db"
+DB_PATH = "/home/ea/TTMbak/JellyFin/JellyFin.db"
 
 
 conn = sqlite3.connect(DB_PATH)
@@ -335,8 +335,8 @@ if import_clicked:
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """
 
-    # cursor.executemany(insert_sql, records_to_insert)
-    # conn.commit()
+    cursor.executemany(insert_sql, records_to_insert)
+    conn.commit()
 
     st.success(f"{len(records_to_insert)} records imported successfully.")
 
