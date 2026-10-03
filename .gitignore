@@ -1,5 +1,8 @@
 #For uncovering good
 .vscode
+.venv
+pyvenv.cfg
+.DS_Store
 bin
 etc
 include

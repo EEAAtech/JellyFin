@@ -12,7 +12,7 @@ def get_db_path():
     local_path = os.path.join(dir_path, "Jel.db")
     """ if os.path.exists(local_path):
         return local_path """
-    return "/home/ea/TTMbak/JellyFin/JellyFin.db"
+    return "/Users/ea/Code/Python/JellyFin/JellyFin.db"  # Default path for macOS
 
 def initialize_empty_db(db_path):
     """

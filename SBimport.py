@@ -8,7 +8,9 @@ from sb_classifier import get_proposed_category, update_sb_meta
 # TODO: make compatible with ICICI. Till then, just copy from the icici excel into an HDFC stmt and ensure the dates are in yyyy-mm-dd format 
 
 
-DB_PATH = "/home/ea/TTMbak/JellyFin/JellyFin.db"
+#DB_PATH = "/home/ea/TTMbak/JellyFin/JellyFin.db" #On Pi
+DB_PATH = "/Users/ea/Code/Python/JellyFin/JellyFin.db" #on mac
+
 st.set_page_config(layout="wide")
 
 # Initialize session state variables
@@ -21,26 +23,22 @@ if "selected_bank_id" not in st.session_state:
 if "last_import_date" not in st.session_state:
     st.session_state.last_import_date = None
 
-# Function to covert Sqlite date string from '%d/%m/%y' to '%Y-%m-%d' 
+# Function to covert Sqlite date string from '%d/%m/%y' or '%d/%m/%Y' to '%Y-%m-%d' 
 def convert_date_format(date_str):
-    try:
-        # Try parsing as '%d/%m/%y'
-        dt = datetime.strptime(date_str, '%d/%m/%y')
-        return dt.strftime('%Y-%m-%d')
-    except ValueError:
-        # If parsing fails, return the original string
-        return date_str
+    if pd.isnull(date_str):
+        return None
+    date_str = str(date_str).strip()
+    for fmt in ('%d/%m/%Y', '%d/%m/%y'):
+        try:
+            return datetime.strptime(date_str, fmt).strftime('%Y-%m-%d')
+        except ValueError:
+            continue
+    return date_str
 
 # Connect to SQLite database
 conn = sqlite3.connect(DB_PATH)
 cursor = conn.cursor()
 
-# Read Bank table and create a select box for the user to choose bank
-query_bank = "SELECT BankId, BankName FROM Bank"
-bank_df = pd.read_sql_query(query_bank, conn)
-bank_dict = dict(zip(bank_df['BankName'], bank_df['BankId']))
-
-selected_bank = st.selectbox('Select bank', list(bank_dict.keys()))
 
 # Allow user to upload xls file
 uploaded_file = st.file_uploader("Choose an Excel (.xls) file", type=['xls', 'xlsx'])
@@ -50,15 +48,28 @@ if uploaded_file is not None and not st.session_state.import_completed:
     # Read the xls file without assuming row 0 is the header
     xls_data = pd.read_excel(uploaded_file, header=None)
     
-    # Set a flag in session state to indicate that the file has been imported
-    # st.session_state["process_clicked"] = True
-    # if "process_clicked" not in st.session_state:
-    #     st.stop()
+    # Get the file name and determine ID and format
+    filename = uploaded_file.name
+    if "XX0073" in filename:
+        selected_bank_id = 1003
+    elif "XX9672" in filename:
+        selected_bank_id = 1005
+    elif "XX5248" in filename:
+        selected_bank_id = 2
+    elif filename.startswith("OpTrans"):
+        selected_bank_id = 3
+    else:
+        selected_bank_id = 0
 
-    # Step 3: Find the row with "Date" in column A (first column)
+    is_op_trans = filename.startswith("OpTrans")
+
+    # Step 3: Find the row with "Date" or "Value Date" in the expected column
     date_row_index = None
     for i in range(len(xls_data)):
-        if xls_data.iloc[i, 0] == 'Date':  # Check first column
+        if not is_op_trans and xls_data.iloc[i, 0] == 'Date':
+            date_row_index = i
+            break
+        elif is_op_trans and xls_data.iloc[i, 1] == 'Value Date':
             date_row_index = i
             break
     
@@ -76,8 +87,17 @@ if uploaded_file is not None and not st.session_state.import_completed:
                 # Keep only the data rows and reset index
                 xls_data = xls_data.iloc[start_row:].reset_index(drop=True)
                 
-                # Get the selected BankId
-                selected_bank_id = bank_dict[selected_bank]
+                # Define column indices based on format
+                if is_op_trans:
+                    date_col = 1
+                    narration_col = 4
+                    withdrawal_col = 5
+                    deposit_col = 6
+                else:
+                    date_col = 0
+                    narration_col = 1
+                    withdrawal_col = 4
+                    deposit_col = 5
                 
                 # Step 7a: Find the last date in SB that data was imported for the selected BankId
                 query_last_import_date = "SELECT MAX(DateT) FROM SB WHERE BankId = ?"
@@ -97,7 +117,7 @@ if uploaded_file is not None and not st.session_state.import_completed:
                         break
                     
                     # Only import if date is after last_import_date
-                    row_date = xls_data.iloc[i].iloc[0]  # First column is the Date column
+                    row_date = xls_data.iloc[i, date_col]  # Use dynamic date column
                     if not pd.isnull(row_date):
                         # Convert row_date to date string for comparison
                         row_date_str = convert_date_format(row_date)
@@ -105,9 +125,9 @@ if uploaded_file is not None and not st.session_state.import_completed:
                         # Only import if this date is after the last import date
                         if last_import_date is None or row_date_str > last_import_date:
                             # Get values by column position since they're accessed by name in the header row
-                            narration = xls_data.iloc[i].iloc[1] if len(xls_data.columns) > 2 else None
-                            withdrawal_amt = xls_data.iloc[i].iloc[4] if len(xls_data.columns) > 4 else None
-                            deposit_amt = xls_data.iloc[i].iloc[5] if len(xls_data.columns) > 3 else None
+                            narration = xls_data.iloc[i, narration_col] if len(xls_data.columns) > narration_col else None
+                            withdrawal_amt = xls_data.iloc[i, withdrawal_col] if len(xls_data.columns) > withdrawal_col else None
+                            deposit_amt = xls_data.iloc[i, deposit_col] if len(xls_data.columns) > deposit_col else None
                             
                             query_insert_sb = """INSERT INTO SB (BankId, DateT, SBName, AmtIn, AmtOut) 
                                                  VALUES (?, ?, ?, ?, ?)"""
@@ -122,6 +142,7 @@ if uploaded_file is not None and not st.session_state.import_completed:
                 
                 conn.commit()
                 st.success(f"Successfully imported {imported_count} records")
+
                 
                 # Store in session state for display
                 st.session_state.imported_data = imported_count
