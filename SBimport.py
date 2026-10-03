@@ -111,8 +111,8 @@ if uploaded_file is not None and not st.session_state.import_completed:
             imported_count = 0
             for i in range(len(xls_data)):
                 # Stop at blank row
-                if pd.isnull(xls_data.iloc[i, 0]):
-                    break
+                #if pd.isnull(xls_data.iloc[i, 0]):
+                    #break # TODO: unsure if this is needed, as the check below should suffice
                 
                 # Stop at another "*" row
                 cell_value = xls_data.iloc[i, 0]
